@@ -1,0 +1,347 @@
+##  This file provides Linux kernel build rules, for executing within the
+##  Kbuild environment.
+##
+
+## Define our own config variables.
+## A kernel Kconfig file may define these variables one day.
+CONFIG_NFP ?= m
+# Include code for /dev/nfp* user space access
+CONFIG_NFP_USER_SPACE_CPP ?= y
+# Export NFP function symbols
+CONFIG_NFP_EXPORTS ?= y
+# Include code for the PFs
+CONFIG_NFP_NET_PF ?= y
+# Include code for the VFs
+CONFIG_NFP_NET_VF ?= y
+
+ccflags-y := $(CFLAGS_EXTRA)
+
+# un-comment for debug symbols
+# ccflags-y += -g3
+
+# Perform checks only if config was evaluated (some targets e.g. clean don't
+# have CONFIG_* variables set).
+ifdef CONFIG_LOCALVERSION
+ifneq ($(CONFIG_PCI),y)
+  $(error NFP: The PCI subsystem (CONFIG_PCI) must be enabled)
+endif
+
+# FIXME: This should be encoded in Kconfig
+ifneq ($(CONFIG_NFP),n)
+  ifneq ($(CONFIG_PCI_MSI),y)
+    $(warning NFP: MSI interrupts (CONFIG_PCI_MSI) not be enabled, disabling NFP_NET drivers)
+    CONFIG_NFP_NET_PF = n
+    CONFIG_NFP_NET_VF = n
+  endif
+  ifneq ($(CONFIG_FW_LOADER),y)
+    $(warning NFP: The firmware loader (CONFIG_FW_LOADER) should be enabled)
+  endif
+endif
+endif
+
+ccflags-y += $(call cc-option, -Wenum-compare,)
+ccflags-y += $(call cc-option, -Wmaybe-uninitialized,)
+ccflags-y += -I$(src)
+
+ifneq ($(W),)
+      ccflags-y += $(call cc-option, -Wno-missing-include-dirs,)
+endif
+
+obj-$(CONFIG_NFP)	+= nfp.o
+
+nfp-objs := \
+	    nfpcore/nfp6000_pcie.o \
+	    nfpcore/nfp_nsp.o \
+	    nfpcore/nfp_cppcore.o \
+	    nfpcore/nfp_cpplib.o \
+	    nfpcore/nfp_em_manager.o \
+	    nfpcore/nfp_hwinfo.o \
+	    nfpcore/nfp_mip.o \
+	    nfpcore/nfp_mutex.o \
+	    nfpcore/nfp_nbi.o \
+	    nfpcore/nfp_nffw.o \
+	    nfpcore/nfp_nsp_cmds.o \
+	    nfpcore/nfp_nsp_eth.o \
+	    nfpcore/nfp_platform.o \
+	    nfpcore/nfp_resource.o \
+	    nfpcore/nfp_rtsym.o \
+	    nfpcore/nfp_target.o \
+	    nfpcore/nfp_nbi_mac_eth.o \
+	    nfpcore/nfp_net_vnic.o \
+	    nfp_net_debugdump.o \
+	    nfp_plat.o \
+	    nfp_main.o
+
+# Select DebugFS if forced from command line or kconfig
+ifeq ($(CONFIG_NFP_DEBUG),y)
+ccflags-y += -DCONFIG_NFP_DEBUG
+
+nfp-objs += \
+		nfp_net_debugfs.o
+endif
+
+# Ubuntu version may contain non-digit characters, like rc, in such case
+# tell the compat code not to trust it.  This should only happen on unofficial,
+# non-LTS kernels.
+UTS_UBUNTU_RELEASE_ABI := \
+	$(shell awk '/UTS_UBUNTU_RELEASE_ABI/ {print $$3; found=1} \
+		     END {if (found != 1) print 0}' \
+		$(srctree)/include/generated/utsrelease.h 2>/dev/null || echo 0)
+
+UBUNTU_BAD_VERSION := \
+	$(shell /bin/bash -c '[[ $(UTS_UBUNTU_RELEASE_ABI) -ge 0 && \
+				 $(UTS_UBUNTU_RELEASE_ABI) =~ ^(0x[0-9a-fA-F]+|[0-9]+)$$ \
+			      ]] 2>/dev/null || echo 1')
+
+ifeq ($(UBUNTU_BAD_VERSION),1)
+  ccflags-y += -DCOMPAT__UTS_UBUNTU_RELEASE_ABI_BAD
+endif
+
+RHEL_MAJOR := \
+	$(shell awk '/RHEL_MAJOR/ {print $$3; found=1} \
+		     END {if (found != 1) print 0}' \
+		$(srctree)/include/generated/uapi/linux/version.h 2>/dev/null || echo 0)
+
+RHEL_MINOR := \
+	$(shell awk '/RHEL_MINOR/ {print $$3; found=1} \
+		     END {if (found != 1) print 0}' \
+		$(srctree)/include/generated/uapi/linux/version.h 2>/dev/null || echo 0)
+
+VER_IS_NON_RHEL := $(shell [ $(RHEL_MAJOR) -eq 0 ] && echo y)
+
+RHEL_GE_7_4 := \
+	$(shell [ $(RHEL_MAJOR) -gt 7 -o \
+	\( $(RHEL_MAJOR) -eq 7 -a $(RHEL_MINOR) -ge 4 \) ] && echo y)
+
+KERNEL_GE_4_6 := \
+	$(shell [ $(VERSION) -gt 4 -o \
+	\( $(VERSION) -eq 4 -a $(PATCHLEVEL) -ge 6 \) ] && echo y)
+
+KERNEL_GE_4_7 := \
+	$(shell [ $(VERSION) -gt 4 -o \
+	\( $(VERSION) -eq 4 -a $(PATCHLEVEL) -ge 7 \) ] && echo y)
+
+KERNEL_GE_4_9 := \
+	$(shell [ $(VERSION) -gt 4 -o \
+	\( $(VERSION) -eq 4 -a $(PATCHLEVEL) -ge 9 \) ] && echo y)
+
+KERNEL_GE_4_13 := \
+	$(shell [ $(VERSION) -gt 4 -o \
+	\( $(VERSION) -eq 4 -a $(PATCHLEVEL) -ge 13 \) ] && echo y)
+
+KERNEL_GE_4_18 := \
+	$(shell [ $(VERSION) -gt 4 -o \
+	\( $(VERSION) -eq 4 -a $(PATCHLEVEL) -ge 18 \) ] && echo y)
+
+KERNEL_GE_5_0 := \
+	$(shell [ $(VERSION) -gt 5 -o \
+	\( $(VERSION) -eq 5 -a $(PATCHLEVEL) -ge 0 \) ] && echo y)
+
+KERNEL_GE_5_2 := \
+	$(shell [ $(VERSION) -gt 5 -o \
+	\( $(VERSION) -eq 5 -a $(PATCHLEVEL) -ge 2 \) ] && echo y)
+
+KERNEL_GE_5_3 := \
+	$(shell [ $(VERSION) -gt 5 -o \
+	\( $(VERSION) -eq 5 -a $(PATCHLEVEL) -ge 3 \) ] && echo y)
+
+KERNEL_GE_5_4 := \
+	$(shell grep -qr DEVLINK_PARAM_FW_LOAD_POLICY_VALUE_UNKNOWN \
+		$(srctree)/include/uapi/linux/devlink.h 2>/dev/null && echo y)
+
+ifeq ($(KERNEL_GE_4_9),y)
+  nfp-objs += nfp_hwmon.o
+else
+  nfp-objs += nfp_hwmon_legacy.o
+endif
+
+# Check for ipv6_dst_lookup_flow - in two different locations as some
+# distros have backported this at different times
+ipv6_stubs_h_path := $(srctree)/include/net/ipv6_stubs.h
+addrconf_h_path := $(srctree)/include/net/addrconf.h
+ifneq (,$(wildcard $(ipv6_stubs_h_path)))
+  COMPAT__HAVE_IP6_DST_FLOW_LOOKUP := \
+        $(shell grep -q ipv6_dst_lookup_flow $(ipv6_stubs_h_path) && echo y)
+else
+  COMPAT__HAVE_IP6_DST_FLOW_LOOKUP := \
+        $(shell grep -q ipv6_dst_lookup_flow $(addrconf_h_path) && echo y)
+endif
+ifeq ($(COMPAT__HAVE_IP6_DST_FLOW_LOOKUP), y)
+  ccflags-y += -DCOMPAT__HAVE_IP6_DST_FLOW_LOOKUP=1
+endif
+
+ifeq ($(CONFIG_NFP_USER_SPACE_CPP),y)
+  ccflags-y += -DCONFIG_NFP_USER_SPACE_CPP
+
+  nfp-objs += nfp_dev_cpp.o
+endif
+ifeq ($(CONFIG_NFP_EXPORTS),y)
+  nfp-objs += nfpcore/nfp_export.o
+endif
+
+ifneq (,$(filter y,$(CONFIG_NFP_NET_PF) $(CONFIG_NFP_NET_VF)))
+  ccflags-y += -DCONFIG_NFP_DEBUG
+
+  nfp-objs += \
+		nfp_app.o \
+		ccm_mbox.o \
+		nfp_net_ctrl.o \
+		nfp_net_common.o \
+		nfp_net_compat.o \
+		nfp_net_ethtool.o \
+		nfp_net_debugfs.o \
+		nfp_net_sriov.o \
+		nfp_port.o
+
+  ifeq ($(KERNEL_GE_5_3)$(CONFIG_TLS_DEVICE),yy)
+    ccflags-y += -DCOMPAT__HAVE_TLS_OFFLOAD=1
+
+    nfp-objs += \
+		crypto/tls.o
+  endif
+
+  ifeq ($(CONFIG_NFP_NET_PF),y)
+    ccflags-y += -DCONFIG_NFP_NET_PF=1
+
+    nfp-objs += \
+		nfp_app_nic.o \
+		nfp_ctrl.o \
+		nfp_net_main.o \
+		nic/main.o
+
+    ifneq (,$(filter y,$(KERNEL_GE_4_6) $(RHEL_GE_7_4)))
+      nfp-objs += \
+	       nfp_devlink.o
+    endif
+
+    ifeq ($(KERNEL_GE_5_4),y)
+      nfp-objs += \
+	       devlink_param.o
+    endif
+
+    ifneq (,$(filter y,$(KERNEL_GE_4_7) $(RHEL_GE_7_4)))
+      nfp-objs += \
+		nfp_shared_buf.o
+    endif
+
+    ifeq ($(KERNEL_GE_4_13),y)
+      nfp-objs += \
+		ccm.o
+    endif
+
+    ifeq ($(KERNEL_GE_4_18),y)
+      ifeq ($(CONFIG_BPF_SYSCALL),y)
+        nfp-objs += \
+		nfp_asm.o \
+		bpf/cmsg.o \
+		bpf/main.o \
+		bpf/offload.o \
+		bpf/verifier.o \
+		bpf/jit.o
+      endif
+    endif
+
+    netdevice_h_path := $(srctree)/include/linux/netdevice.h
+    COMPAT__HAVE_REGISTER_NETDEVICE_NOTIFIER_RH := \
+	    $(shell [ -e $(netdevice_h_path) ] && \
+		    grep register_netdevice_notifier_rh $(netdevice_h_path) > /dev/null && \
+		    echo y)
+
+    ifeq ($(COMPAT__HAVE_REGISTER_NETDEVICE_NOTIFIER_RH), y)
+        ccflags-y += -DCOMPAT__HAVE_REGISTER_NETDEVICE_NOTIFIER_RH=1
+    endif
+
+    metadata_h_path := $(srctree)/include/net/dst_metadata.h
+    COMPAT__HAVE_METADATA_IP_TUNNEL := \
+	    $(shell [ -e $(metadata_h_path) ] && \
+		    grep METADATA_IP_TUNNEL $(metadata_h_path) > /dev/null && \
+		    echo y)
+
+    ifeq ($(COMPAT__HAVE_METADATA_IP_TUNNEL), y)
+      ifeq ($(VER_IS_NON_RHEL), y)
+	ccflags-y += -DCOMPAT__HAVE_METADATA_IP_TUNNEL=1
+	nfp-objs += \
+		nfp_net_repr.o
+
+	ifeq ($(CONFIG_NET_SWITCHDEV),y)
+	  ccflags-y += -DCONFIG_NFP_APP_FLOWER
+	  nfp-objs += \
+		flower/action.o \
+		flower/cmsg.o \
+		flower/lag_conf.o \
+		flower/match.o \
+		flower/metadata.o \
+		flower/offload.o \
+		flower/main.o \
+		flower/tunnel_conf.o
+
+	  ifeq ($(KERNEL_GE_5_2),y)
+	    nfp-objs += \
+		flower/qos_conf.o
+	  endif
+	else ifdef CONFIG_LOCALVERSION # don't warn on clean
+          $(warning NFP: CONFIG_NET_SWITCHDEV not enabled in the kernel, disabling apps: flower)
+	endif
+
+	ifeq ($(KERNEL_GE_5_0),y)
+	  ccflags-y += -DCONFIG_NFP_APP_ABM_NIC
+	  nfp-objs += \
+		abm/cls.o \
+		abm/ctrl.o \
+		abm/main.o \
+		abm/qdisc.o
+	endif
+      else
+        $(warning NFP: RHEL kernel detected, disabling apps: flower)
+        $(warning Please contact Netronome Support if the flower app is required.)
+      endif
+    endif
+  endif
+
+  ifeq ($(CONFIG_NFP_NET_VF),y)
+    ccflags-y += -DCONFIG_NFP_NET_VF=1
+
+    nfp-objs += nfp_netvf_main.o
+  endif
+endif # CONFIG_NFP_NET_*
+
+####################
+# Build information
+####################
+
+# Determine the NFP driver's source directory.
+nfp_src_dir := $(dir $(realpath $(src)/nfp_main.c))
+ifeq ($(nfp_src_dir),)
+nfp_src_dir := $(dir $(shell readlink $(src)/nfp_main.c))
+endif
+ifeq ($(nfp_src_dir),)
+nfp_src_dir := .
+endif
+
+# Work out driver version if build from repository
+NFPVER := $(shell git -C $(nfp_src_dir) rev-parse --short HEAD 2> /dev/null)
+ifeq ($(NFPVER),)
+  # Some DKMS packages may want the .revision to be inside source dir
+  ifneq (,$(wildcard $(src)/.revision))
+    NFPVER := rev-$(shell cat $(src)/.revision)
+  endif
+  # Use ../.revision by default for backward compatibility
+  ifneq (,$(wildcard $(src)/../.revision))
+    NFPVER := rev-$(shell cat $(src)/../.revision)
+  endif
+endif
+ifeq ($(NFPVER),)
+  NFPVER := no-src-ver
+endif
+
+clean-files := $(obj)/nfp_build_info.h
+$(obj)/nfp_build_info.h: FORCE
+	@echo "/* Automatically generated file */" > $@
+	@echo "#define NFP_SRC_VERSION \"$(NFPVER) (o-o-t)\"" >> $@
+	@echo "#define NFP_BUILD_USER_ID \"$(shell id -u -n)\"" >> $@
+	@echo "#define NFP_BUILD_USER \"$(shell getent passwd `id -u -n` | cut -d ':' -f 5 | cut -d ',' -f 1)\"" >> $@
+	@echo "#define NFP_BUILD_HOST \"$(shell hostname)\"" >> $@
+	@echo "#define NFP_BUILD_PATH \"$(obj)\"" >> $@
+	@echo "#define NFP_SRC_PATH \"$(nfp_src_dir)\"" >> $@
+
+$(obj)/nfp_main.o: $(obj)/nfp_build_info.h
