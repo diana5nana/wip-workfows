@@ -30,13 +30,14 @@ jobs:
           RELEASE_NAME: ${{ matrix.release.name }}
         run: |
           case $RELEASE_NAME in
-          el7.*)    OS_DIR1="os"
-                    OS_DIR2=""
-                    ;;
-          el8*)    OS_DIR1="BaseOS"
-                   OS_DIR2="os"
-                   ;;
+          el7*)   OS_DIR1="os"
+                  OS_DIR2=""
+                  ;;
+          el8*)   OS_DIR1="BaseOS"
+                  OS_DIR2="os"
+                  ;;
           esac
+          
           MIRROR="mirrors.bclinux.org/bclinux" ;;
           OS_PATH="$MIRROR/$RELEASE_NAME/$OS_DIR1/x86_64/$OS_DIR2/Packages"
           UPDATE_PATH="$MIRROR/$RELEASE_NAME/updates/x86_64/$OS_DIR2/Packages"
