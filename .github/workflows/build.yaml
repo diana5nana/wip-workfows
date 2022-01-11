@@ -22,7 +22,7 @@ jobs:
 				        { "name": "el8", "container": "el8" },
         ]
     container:
-      image: bclinux:chinamobiles/bclinux7:latest
+      image: chinamobiles/bclinux7:latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v2
