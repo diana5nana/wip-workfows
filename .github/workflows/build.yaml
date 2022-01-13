@@ -16,6 +16,7 @@ jobs:
     strategy:
       matrix:
         release: [
+                { "name": "el8", "container": "8.3.2011" },
                 { "name": "el8.1", "container": "8.3.2011" },
 				        { "name": "el8.2", "container": "8.3.2011" },
         ]
