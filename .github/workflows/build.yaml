@@ -16,6 +16,17 @@ jobs:
     strategy:
       matrix:
         release: [
+                { "name": "el7", "container": "7.9.2009" },
+                { "name": "el7.1", "container": "7.9.2009" },
+                { "name": "el7,2", "container": "7.9.2009" },
+                { "name": "el7.3", "container": "7.9.2009" },
+                { "name": "el7.4", "container": "7.9.2009" },
+                { "name": "el7.5", "container": "7.9.2009" },
+                { "name": "el7.6", "container": "7.9.2009" },
+                { "name": "el7.7", "container": "7.9.2009" },
+                { "name": "el7.8", "container": "7.9.2009" },
+                { "name": "el8", "container": "8.3.2011" },
+                { "name": "el8.1", "container": "8.3.2011" },
 				        { "name": "el8.2", "container": "8.3.2011" },
         ]
     container:
@@ -94,11 +105,10 @@ jobs:
             fi
           done
           KVER="4.19.0-"${array[((${#array[@]}-1))]}
-          KVER="4.18.0-193.1.12"
           echo $KVER
           echo "KVER=${KVER}*" >> $GITHUB_ENV
 
-      - name: Download OS Kernel Header Packages
+      - name: Download BCLinux OS Kernel Header Packages
         uses: ./.github/actions/download
         with:
             output-path: ${{ env.DOWNLOAD }}
