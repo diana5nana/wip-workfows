@@ -16,11 +16,10 @@ jobs:
     strategy:
       matrix:
         release: [
-                { "name": "el7.8", "container": "el7.8" },
-				        { "name": "el8.1", "container": "el8.1" },
+				        { "name": "el8.2", "container": "8.3.2011" },
         ]
     container:
-      image: chinamobiles/bclinux7:latest
+      image: centos:${{ matrix.release.container }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v2
@@ -68,10 +67,17 @@ jobs:
       - name: Filter latest BCLinux stream kernel
         if: startsWith(matrix.release.name, 'el8')
         run: |
-          KVER=$(curl -s "http://mirrors.bclinux.org/bclinux/el8/BaseOS/x86_64/os/Packages/" | \
-                 grep -o "kernel-devel-4.19.0-[0-9].[0-9].[0-9].[0-9].el8.bclinux.x86_64.rpm" | \
-                 tail -n 1 | \
-                 grep -o 4.19.0-[0-9].[0-9].[0-9].[0-9])
+          for i in $(curl -s "http://mirrors.bclinux.org/bclinux/el8/BaseOS/x86_64/os/Packages/" | \
+          grep -o -E "kernel-devel-4.19.0-([0-9]|.){1,12}.el8.bclinux.x86_64.rpm"); \
+          do var=${i%.el8.bclinux.x86_64.rpm*}; var=${var#*4.19.0-}; array[${#array[@]}]=$var; done;
+
+          for((i=0;i<${#array[@]}-1;i++));do ver1=${array[$i]};ver2=${array[$((i+1))]}; | \
+          if [ ${ver1%%.*} -gt ${ver2%%.*} ];then array[$((i+1))]=${array[$i]}; | \
+          else ver1=${ver1#*.}; ver2=${ver2#*.}; if [ ${ver1%%.*} -gt ${ver2%%.*} ]; | \
+          then array[$((i+1))]=${array[$i]};else ver1=${ver1#*.}; ver2=${ver2#*.}; | \
+          if [ ${ver1%%.*} -gt ${ver2%%.*} ]; then array[$((i+1))]=${array[$i]};fi;fi;fi;done;
+          KVER="4.19.0-"${array[((${#array[@]}-1))]}
+
           echo $KVER
           echo "KVER=${KVER}*" >> $GITHUB_ENV
 
