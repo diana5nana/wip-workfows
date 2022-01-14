@@ -69,9 +69,9 @@ jobs:
       - name: Filter latest BCLinux stream kernel
         if: startsWith(matrix.release.name, 'el8')
         run: |
-          for i in $(curl -s "http://mirrors.bclinux.org/bclinux/${{ matrix.release.name }}/BaseOS/x86_64/os/Packages/" | grep -o -E "kernel-devel-4.19.0-([0-9]|.){1,12}.el8.bclinux.x86_64.rpm")
+          for i in $(curl -s "http://${{ env.OS_PATH }}/" | grep -o -E "kernel-devel-4.19.0-([0-9]|.){1,12}.el8([0-9]|_){0,9}.bclinux.x86_64.rpm")
           do 
-            var=${i%.${{ matrix.release.name }}.bclinux.x86_64.rpm*}
+            var=${i%.el8*}
             var=${var#*4.19.0-}
             array[${#array[@]}]=$var
           done
