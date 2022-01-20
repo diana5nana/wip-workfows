@@ -5,8 +5,76 @@ on: [push]
 env:
   DOWNLOAD: ".download"
   UNPACKED: ".unpacked"
-  
+
 jobs:
+  build-ubuntu:
+    name: Build Ubuntu
+    runs-on: ubuntu-${{ matrix.release.name }}
+    timeout-minutes: 90
+    env:
+      MIRROR: "https://mirrors.edge.kernel.org/ubuntu"
+      FLAVOUR: generic
+    strategy:
+      matrix:
+        release: [
+                { "name": "20.04", "kernel": "5.4.0" },
+                { "name": "18.04", "kernel": "4.15.0" },
+        ]
+        hwe: [ "", "hwe" ]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Set Ccache Environment
+        run: |
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+          echo "CCACHE_HARDLINK=true" >> $GITHUB_ENV
+
+      - name: Set HWE Environment
+        if: matrix.hwe == 'hwe'
+        env:
+          NAME: ${{ matrix.release.name }}
+        run: |
+          MATCH="*~${NAME#*-}.[0-9]"
+          echo "MATCH=$MATCH" >> $GITHUB_ENV
+          echo "FLAVOUR_MATCH=*-${FLAVOUR}_${MATCH}" >> $GITHUB_ENV
+          echo "PKG_DIR=linux-hwe" >> $GITHUB_ENV
+          echo "EXTRA_DEP=libelf-dev" >> $GITHUB_ENV
+
+      - name: Set Non-HWE Environment
+        if: matrix.hwe == ''
+        env:
+          MATCH: ${{ matrix.release.kernel }}-*
+        run: |
+          echo "MATCH=$MATCH" >> $GITHUB_ENV
+          echo "FLAVOUR_MATCH=${MATCH}-${FLAVOUR}_*" >> $GITHUB_ENV
+          echo "PKG_DIR=linux" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: sudo apt-get -q=2 install ccache $EXTRA_DEP
+
+      - name: Download Kernel Headers
+        uses: ./.github/actions/download
+        with:
+            output-path: ${{ env.DOWNLOAD }}
+            url: "${{ env.MIRROR }}/pool/main/l/${{ env.PKG_DIR }}"
+            accept: "linux-headers-${{ env.MATCH }}_all.deb,linux-headers-${{ env.FLAVOUR_MATCH }}_amd64.deb"
+
+      - name: Unpack Kernel Headers
+        uses: ./.github/actions/unpack-deb
+        with:
+            input-path: ${{ env.DOWNLOAD }}
+            output-path: ${{ env.UNPACKED }}
+
+      - name: Build
+        uses: ./.github/actions/build
+        with:
+            search-path: "${{ env.UNPACKED }}/usr/src"
+            search-pattern: "*-${{ env.FLAVOUR }}"
+
+      - name: Ccache statistics
+        run: ccache -s
+
   build-centos:
     name: Build CentOS
     runs-on: ubuntu-20.04
@@ -17,21 +85,6 @@ jobs:
       matrix:
         release: [
                 { "name": "7.0.1406", "container": "7.9.2009" },
-                { "name": "7.1.1503", "container": "7.9.2009" },
-                { "name": "7.2.1511", "container": "7.9.2009" },
-                { "name": "7.3.1611", "container": "7.9.2009" },
-                { "name": "7.4.1708", "container": "7.9.2009" },
-                { "name": "7.5.1804", "container": "7.9.2009" },
-                { "name": "7.6.1810", "container": "7.9.2009" },
-                { "name": "7.7.1908", "container": "7.9.2009" },
-                { "name": "7.8.2003", "container": "7.9.2009" },
-                { "name": "7.9.2009", "container": "7.9.2009" },
-                { "name": "8.0.1905", "container": "8.3.2011" },
-                { "name": "8.1.1911", "container": "8.3.2011" },
-                { "name": "8.2.2004", "container": "8.3.2011" },
-                { "name": "8.3.2011", "container": "8.3.2011" },
-                { "name": "8.4.2105", "container": "8.3.2011" },
-                { "name": "8.5.2111", "container": "8.3.2011" },
                 { "name": "8-stream", "container": "8.3.2011" },
         ]
     container:
@@ -119,6 +172,208 @@ jobs:
         with:
             search-path: "${{ env.UNPACKED }}/usr/src/kernels"
 
+  build-upstream-ubuntu:
+    name: Build Upstream (Ubuntu)
+    runs-on: ubuntu-${{ matrix.release.runs-on }}
+    timeout-minutes: 20
+    env:
+      CDN: "cdn.kernel.org/pub/linux/kernel"
+      GITWEB: "git.kernel.org"
+      KERNEL_TARGET: "deb-pkg"
+    strategy:
+      matrix:
+        release: [
+          { name: "5.0",       runs-on: "18.04", },
+        ]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Set Environment (Release)
+        if: startsWith(matrix.release.name, 'net') != true
+        run: |
+          RELEASE="${{ matrix.release.name }}"
+          case $RELEASE in
+          4.1[5-9]) EXTRA_DEP+=" libelf-dev" ;;
+          esac
+          MAJOR="${RELEASE%.*}"
+          DIR="linux-$RELEASE"
+          echo "CACHE_ID=$RELEASE" >> $GITHUB_ENV
+          echo "EXTRA_DEP=$EXTRA_DEP" >> $GITHUB_ENV
+          echo "KERNEL_DIR=$UNPACKED/$DIR" >> $GITHUB_ENV
+          echo "REMOTE=$CDN/v$MAJOR.x/$DIR.tar.xz" >> $GITHUB_ENV
+          echo "TAR_FLAGS=-J" >> $GITHUB_ENV
+
+      - name: Set Environment (Development Tree)
+        if: startsWith(matrix.release.name, 'net')
+        run: |
+          TREE="${{ matrix.release.name }}"
+          COMMIT_ID="$(wget -q -O - https://$GITWEB/netdev/$TREE/p/master | sed -En 's/[^ ]* //; T; s/(.{12}).*/\1/; p; q')"
+          DIR="$TREE-$COMMIT_ID"
+          echo "REMOTE=$GITWEB/pub/scm/linux/kernel/git/netdev/$TREE.git/snapshot/$DIR.tar.gz" >> $GITHUB_ENV
+          echo "CACHE_ID=$COMMIT_ID" >> $GITHUB_ENV
+          echo "KERNEL_DIR=$UNPACKED/$DIR" >> $GITHUB_ENV
+          echo "TAR_FLAGS=-z" >> $GITHUB_ENV
+
+      - name: Cache Kernel Header Package
+        uses: actions/cache@v2
+        id: header-cache
+        env:
+          cache-name: cache-headers-upstream
+        with:
+          path: ${{ env.UNPACKED }}/linux-headers-*.deb
+          key: ${{ env.cache-name }}-${{ env.CACHE_ID }}-on-ubuntu-${{ env.matrix.release.runs-on }}-v101
+
+      - name: Set Environment (Not Cached)
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          EXTRA_DEP+=" "libelf-dev
+          echo "EXTRA_DEP=$EXTRA_DEP" >> $GITHUB_ENV
+
+      - name: Install Dependencies
+        if: env.EXTRA_DEP != ''
+        run: sudo apt-get -q=2 install ${{ env.EXTRA_DEP }}
+
+      - name: Download Kernel Source
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/download
+        with:
+          output-path: "$DOWNLOAD"
+          url: "https://$REMOTE"
+
+      - name: Unpack Kernel Source
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$UNPACKED"
+          tar -C "$UNPACKED" "$TAR_FLAGS" -xf "$DOWNLOAD/$REMOTE"
+
+      - name: Configure Kernel
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          cp -p .github/data/local_defconfig "$KERNEL_DIR/arch/x86/configs/"
+          make -s -C "$KERNEL_DIR" local_defconfig
+
+      - name: Build Kernel Packages
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          make -s -j"$(nproc)" -C "$KERNEL_DIR" "$KERNEL_TARGET"
+
+      - name: List Kernel Header Packages
+        run: |
+          ls "$UNPACKED"/linux-headers-*.deb
+
+      - name: Unpack Kernel Headers
+        uses: ./.github/actions/unpack-deb
+        with:
+            input-path: ${{ env.UNPACKED }}
+            output-path: ${{ env.UNPACKED }}
+
+      - name: Build
+        uses: ./.github/actions/build
+        with:
+            search-path: "${{ env.UNPACKED }}/usr/src"
+
+  build-upstream-centos:
+    name: Build Upstream (CentOS)
+    runs-on: ubuntu-20.04
+    timeout-minutes: 20
+    env:
+      CDN: "cdn.kernel.org/pub/linux/kernel"
+      KERNEL_TARGET: "rpm-pkg"
+    strategy:
+      matrix:
+        release: [
+          { name: "4.10",      container: "7.5.1804", },
+        ]
+    container:
+      image: centos:${{ matrix.release.container }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Set Environment (Release)
+        run: |
+          RELEASE="${{ matrix.release.name }}"
+          EXTRA_DEP+=" elfutils-libelf-devel"
+          EXTRA_DEP+=" gcc"
+          EXTRA_DEP+=" make"
+          EXTRA_DEP+=" wget"
+          EXTRA_DEP+=" rpm-build"
+          EXTRA_DEP+=" perl"
+          EXTRA_DEP+=" perl-devel"
+          EXTRA_DEP+=" bc"
+          EXTRA_DEP+=" ca-certificates"
+          MAJOR="${RELEASE%.*}"
+          DIR="linux-$RELEASE"
+          echo "CACHE_ID=$RELEASE" >> $GITHUB_ENV
+          echo "EXTRA_DEP=$EXTRA_DEP" >> $GITHUB_ENV
+          echo "KERNEL_DIR=$UNPACKED/$DIR" >> $GITHUB_ENV
+          echo "REMOTE=$CDN/v$MAJOR.x/$DIR.tar.xz" >> $GITHUB_ENV
+          echo "TAR_FLAGS=-J" >> $GITHUB_ENV
+
+      - name: Cache Kernel Header Package
+        uses: actions/cache@v2
+        id: header-cache
+        env:
+          cache-name: cache-headers-upstream
+        with:
+          path: ${{ env.UNPACKED }}/kernel-*.rpm
+          key: ${{ env.cache-name }}-${{ env.CACHE_ID }}-on-centos-${{ env.matrix.release.container }}-v1
+
+      - name: Install Dependencies
+        if: env.EXTRA_DEP != ''
+        run: yum -qy install ${{ env.EXTRA_DEP }}
+
+      - name: Download Kernel Source
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/download
+        with:
+          output-path: "$DOWNLOAD"
+          url: "https://$REMOTE"
+
+      - name: Unpack Kernel Source
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$UNPACKED"
+          tar -C "$UNPACKED" "$TAR_FLAGS" -xf "$DOWNLOAD/$REMOTE"
+
+      - name: Patch Kernel Source
+        if: steps.header-cache.outputs.cache-hit != 'true' && matrix.release.name == '3.8'
+        run: |
+          sed -i 's/if (!defined(@val))/if (!(@val))/' \
+            "$KERNEL_DIR/kernel/timeconst.pl"
+
+      - name: Configure Kernel
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          cp -p .github/data/local_defconfig "$KERNEL_DIR/arch/x86/configs/"
+          make -s -C "$KERNEL_DIR" local_defconfig
+
+      - name: Build Kernel Packages
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          make -s -C "$KERNEL_DIR" "$KERNEL_TARGET"
+
+      - name: Move Kernel Packages
+        if: steps.header-cache.outputs.cache-hit != 'true'
+        run: |
+          mv /github/home/rpmbuild/RPMS/x86_64/* "$UNPACKED"/
+
+      - name: List Kernel Header Packages
+        run: |
+          ls "$UNPACKED"/kernel-*.rpm
+
+      - name: Unpack Kernel Headers
+        uses: ./.github/actions/unpack-rpm
+        with:
+            input-path: ${{ env.UNPACKED }}
+            output-path: ${{ env.UNPACKED }}
+
+      - name: Build
+        uses: ./.github/actions/build
+        with:
+            search-path: "${{ env.UNPACKED }}/usr/src/kernels"
+
   build-bclinux:
     name: Build BCLinux
     runs-on: ubuntu-20.04
@@ -130,7 +385,7 @@ jobs:
         release: [
                 { "name": "el8", "container": "8.3.2011" },
                 { "name": "el8.1", "container": "8.3.2011" },
-				        { "name": "el8.2", "container": "8.3.2011" },
+                { "name": "el8.2", "container": "8.3.2011" },
         ]
     container:
       image: centos:${{ matrix.release.container }}
@@ -183,23 +438,23 @@ jobs:
         run: |
           for i in $(curl -s "http://${{ env.OS_PATH }}/" | \
           grep -o -E "kernel-devel-4.19.0-([0-9]|.){1,12}.el8([0-9]|_){0,9}.bclinux.x86_64.rpm")
-          do 
+          do
             var=${i%.el8*}
             var=${var#*4.19.0-}
             array[${#array[@]}]=$var
           done
           for((i=0;i<${#array[@]}-1;i++))
-          do 
+          do
             ver1=${array[$i]}
             ver2=${array[$((i+1))]}
             if [ ${ver1%%.*} -gt ${ver2%%.*} ];then
               array[$((i+1))]=${array[$i]}
-            else 
+            else
               ver1=${ver1#*.}
               ver2=${ver2#*.}
               if [ ${ver1%%.*} -gt ${ver2%%.*} ];then
                 array[$((i+1))]=${array[$i]}
-              else 
+              else
                 ver1=${ver1#*.}
                 ver2=${ver2#*.}
                 if [ ${ver1%%.*} -gt ${ver2%%.*} ];then
