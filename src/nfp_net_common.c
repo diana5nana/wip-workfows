@@ -500,6 +500,14 @@ static irqreturn_t nfp_net_irq_rxtx(int irq, void *data)
 {
 	struct nfp_net_r_vector *r_vec = data;
 
+#ifdef COMPAT_HAVE_DIM
+	/* Currently we cannot tell if it's a rx or tx interrupt,
+	 * since dim does not need accurate event_ctr to calculate,
+	 * we just use this counter for both rx and tx dim.
+	 */
+	r_vec->event_ctr++;
+#endif
+
 	napi_schedule_irqoff(&r_vec->napi);
 
 	/* The FW auto-masks any interrupt, either via the MASK bit in
@@ -1748,7 +1756,7 @@ nfp_net_parse_meta(struct net_device *netdev, struct nfp_meta_parsed *meta,
 		case NFP_NET_META_RESYNC_INFO:
 			if (nfp_net_tls_rx_resync_req(netdev, data, pkt,
 						      pkt_len))
-				return NULL;
+				return false;
 			data += sizeof(struct nfp_net_tls_resync_req);
 			break;
 		default:
@@ -1874,7 +1882,9 @@ static int nfp_net_rx(struct nfp_net_rx_ring *rx_ring, int budget)
 #endif
 	int idx;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 0)
 	rcu_read_lock();
+#endif
 	xdp_prog = READ_ONCE(dp->xdp_prog);
 	true_bufsz = xdp_prog ? PAGE_SIZE : dp->fl_bufsz;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
@@ -1999,7 +2009,11 @@ static int nfp_net_rx(struct nfp_net_rx_ring *rx_ring, int budget)
 							    xdp_prog, act);
 				continue;
 			default:
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0)
 				bpf_warn_invalid_xdp_action(act);
+#else
+				bpf_warn_invalid_xdp_action(dp->netdev, xdp_prog, act);
+#endif
 				fallthrough;
 			case XDP_ABORTED:
 				trace_xdp_exception(dp->netdev, xdp_prog, act);
@@ -2099,7 +2113,9 @@ static int nfp_net_rx(struct nfp_net_rx_ring *rx_ring, int budget)
 			if (!nfp_net_xdp_complete(tx_ring))
 				pkts_polled = budget;
 	}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 0)
 	rcu_read_unlock();
+#endif
 
 	return pkts_polled;
 }
@@ -2125,6 +2141,38 @@ static int nfp_net_poll(struct napi_struct *napi, int budget)
 	if (pkts_polled < budget)
 		if (napi_complete_done(napi, pkts_polled))
 			nfp_net_irq_unmask(r_vec->nfp_net, r_vec->irq_entry);
+
+#ifdef COMPAT_HAVE_DIM
+	if (r_vec->nfp_net->rx_coalesce_adapt_on && r_vec->rx_ring) {
+		struct dim_sample dim_sample = {};
+		unsigned int start;
+		u64 pkts, bytes;
+
+		do {
+			start = u64_stats_fetch_begin(&r_vec->rx_sync);
+			pkts = r_vec->rx_pkts;
+			bytes = r_vec->rx_bytes;
+		} while (u64_stats_fetch_retry(&r_vec->rx_sync, start));
+
+		dim_update_sample(r_vec->event_ctr, pkts, bytes, &dim_sample);
+		net_dim(&r_vec->rx_dim, dim_sample);
+	}
+
+	if (r_vec->nfp_net->tx_coalesce_adapt_on && r_vec->tx_ring) {
+		struct dim_sample dim_sample = {};
+		unsigned int start;
+		u64 pkts, bytes;
+
+		do {
+			start = u64_stats_fetch_begin(&r_vec->tx_sync);
+			pkts = r_vec->tx_pkts;
+			bytes = r_vec->tx_bytes;
+		} while (u64_stats_fetch_retry(&r_vec->tx_sync, start));
+
+		dim_update_sample(r_vec->event_ctr, pkts, bytes, &dim_sample);
+		net_dim(&r_vec->tx_dim, dim_sample);
+	}
+#endif
 
 	return pkts_polled;
 }
@@ -2613,7 +2661,7 @@ nfp_net_rx_ring_alloc(struct nfp_net_dp *dp, struct nfp_net_rx_ring *rx_ring)
 
 	if (dp->netdev) {
 		err = xdp_rxq_info_reg(&rx_ring->xdp_rxq, dp->netdev,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if VER_NON_RHEL_GE(5, 11) || RHEL_RELEASE_GE(8, 326, 0, 0)
 				       rx_ring->idx, rx_ring->r_vec->napi.napi_id);
 #else
 				       rx_ring->idx);
@@ -2970,6 +3018,7 @@ static int nfp_net_set_config_and_enable(struct nfp_net *nn)
  */
 static void nfp_net_close_stack(struct nfp_net *nn)
 {
+	struct nfp_net_r_vector *r_vec;
 	unsigned int r;
 
 	disable_irq(nn->irq_entries[NFP_NET_IRQ_LSC_IDX].vector);
@@ -2977,8 +3026,18 @@ static void nfp_net_close_stack(struct nfp_net *nn)
 	nn->link_up = false;
 
 	for (r = 0; r < nn->dp.num_r_vecs; r++) {
-		disable_irq(nn->r_vecs[r].irq_vector);
-		napi_disable(&nn->r_vecs[r].napi);
+		r_vec = &nn->r_vecs[r];
+
+		disable_irq(r_vec->irq_vector);
+		napi_disable(&r_vec->napi);
+
+#ifdef COMPAT_HAVE_DIM
+		if (r_vec->rx_ring)
+			cancel_work_sync(&r_vec->rx_dim.work);
+
+		if (r_vec->tx_ring)
+			cancel_work_sync(&r_vec->tx_dim.work);
+#endif
 	}
 
 	netif_tx_disable(nn->dp.netdev);
@@ -3045,17 +3104,92 @@ void nfp_ctrl_close(struct nfp_net *nn)
 	rtnl_unlock();
 }
 
+#ifdef COMPAT_HAVE_DIM
+static void nfp_net_rx_dim_work(struct work_struct *work)
+{
+	struct nfp_net_r_vector *r_vec;
+	unsigned int factor, value;
+	struct dim_cq_moder moder;
+	struct nfp_net *nn;
+	struct dim *dim;
+
+	dim = container_of(work, struct dim, work);
+	moder = net_dim_get_rx_moderation(dim->mode, dim->profile_ix);
+	r_vec = container_of(dim, struct nfp_net_r_vector, rx_dim);
+	nn = r_vec->nfp_net;
+
+	/* Compute factor used to convert coalesce '_usecs' parameters to
+	 * ME timestamp ticks.  There are 16 ME clock cycles for each timestamp
+	 * count.
+	 */
+	factor = nn->tlv_caps.me_freq_mhz / 16;
+	if (nfp_net_coalesce_para_check(factor * moder.usec, moder.pkts))
+		return;
+
+	/* copy RX interrupt coalesce parameters */
+	value = (moder.pkts << 16) | (factor * moder.usec);
+	nn_writel(nn, NFP_NET_CFG_RXR_IRQ_MOD(r_vec->rx_ring->idx), value);
+	(void)nfp_net_reconfig(nn, NFP_NET_CFG_UPDATE_IRQMOD);
+
+	dim->state = DIM_START_MEASURE;
+}
+
+static void nfp_net_tx_dim_work(struct work_struct *work)
+{
+	struct nfp_net_r_vector *r_vec;
+	unsigned int factor, value;
+	struct dim_cq_moder moder;
+	struct nfp_net *nn;
+	struct dim *dim;
+
+	dim = container_of(work, struct dim, work);
+	moder = net_dim_get_tx_moderation(dim->mode, dim->profile_ix);
+	r_vec = container_of(dim, struct nfp_net_r_vector, tx_dim);
+	nn = r_vec->nfp_net;
+
+	/* Compute factor used to convert coalesce '_usecs' parameters to
+	 * ME timestamp ticks.  There are 16 ME clock cycles for each timestamp
+	 * count.
+	 */
+	factor = nn->tlv_caps.me_freq_mhz / 16;
+	if (nfp_net_coalesce_para_check(factor * moder.usec, moder.pkts))
+		return;
+
+	/* copy TX interrupt coalesce parameters */
+	value = (moder.pkts << 16) | (factor * moder.usec);
+	nn_writel(nn, NFP_NET_CFG_TXR_IRQ_MOD(r_vec->tx_ring->idx), value);
+	(void)nfp_net_reconfig(nn, NFP_NET_CFG_UPDATE_IRQMOD);
+
+	dim->state = DIM_START_MEASURE;
+}
+#endif
+
 /**
  * nfp_net_open_stack() - Start the device from stack's perspective
  * @nn:      NFP Net device to reconfigure
  */
 static void nfp_net_open_stack(struct nfp_net *nn)
 {
+	struct nfp_net_r_vector *r_vec;
 	unsigned int r;
 
 	for (r = 0; r < nn->dp.num_r_vecs; r++) {
-		napi_enable(&nn->r_vecs[r].napi);
-		enable_irq(nn->r_vecs[r].irq_vector);
+		r_vec = &nn->r_vecs[r];
+
+#ifdef COMPAT_HAVE_DIM
+		if (r_vec->rx_ring) {
+			INIT_WORK(&r_vec->rx_dim.work, nfp_net_rx_dim_work);
+			r_vec->rx_dim.mode = DIM_CQ_PERIOD_MODE_START_FROM_EQE;
+		}
+
+		if (r_vec->tx_ring) {
+			INIT_WORK(&r_vec->tx_dim.work, nfp_net_tx_dim_work);
+			r_vec->tx_dim.mode = DIM_CQ_PERIOD_MODE_START_FROM_EQE;
+		}
+#endif
+
+		napi_enable(&r_vec->napi);
+		enable_irq(r_vec->irq_vector);
 	}
 
 	netif_tx_wake_all_queues(nn->dp.netdev);
@@ -3258,6 +3392,13 @@ static int nfp_net_dp_swap_enable(struct nfp_net *nn, struct nfp_net_dp *dp)
 	for (r = 0; r <	nn->max_r_vecs; r++)
 		nfp_net_vector_assign_rings(&nn->dp, &nn->r_vecs[r], r);
 
+#ifdef COMPAT__HAVE_NETIF_SET_REAL_NUM_QUEUES
+	err = netif_set_real_num_queues(nn->dp.netdev,
+					nn->dp.num_stack_tx_rings,
+					nn->dp.num_rx_rings);
+	if (err)
+		return err;
+#else
 	err = netif_set_real_num_rx_queues(nn->dp.netdev, nn->dp.num_rx_rings);
 	if (err)
 		return err;
@@ -3268,7 +3409,7 @@ static int nfp_net_dp_swap_enable(struct nfp_net *nn, struct nfp_net_dp *dp)
 		if (err)
 			return err;
 	}
-
+#endif
 	return nfp_net_set_config_and_enable(nn);
 }
 
@@ -3691,7 +3832,7 @@ nfp_net_get_phys_port_name(struct net_device *netdev, char *name, size_t len)
 }
 #endif
 
-#if COMPAT__HAVE_VXLAN_OFFLOAD && LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+#if COMPAT__HAVE_VXLAN_OFFLOAD && (VER_NON_RHEL_LT(5, 9) || VER_RHEL_LT(8, 4))
 /**
  * nfp_net_set_vxlan_port() - set vxlan port in SW and reconfigure HW
  * @nn:   NFP Net device to reconfigure
@@ -3799,7 +3940,7 @@ static int nfp_net_xdp_setup_drv(struct nfp_net *nn, struct netdev_bpf *bpf)
 	struct nfp_net_dp *dp;
 	int err;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+#if VER_NON_RHEL_LT(5, 10) || VER_RHEL_LT(8, 4)
 	if (!xdp_attachment_flags_ok(&nn->xdp, bpf))
 		return -EBUSY;
 #endif
@@ -3833,7 +3974,7 @@ static int nfp_net_xdp_setup_hw(struct nfp_net *nn, struct netdev_bpf *bpf)
 {
 	int err;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+#if VER_NON_RHEL_LT(5, 10) || VER_RHEL_LT(8, 4)
 	if (!xdp_attachment_flags_ok(&nn->xdp_hw, bpf))
 		return -EBUSY;
 #endif
@@ -3863,7 +4004,7 @@ static int nfp_net_xdp(struct net_device *netdev, struct netdev_bpf *xdp)
 		return nfp_net_xdp_setup_hw(nn, xdp);
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+#if VER_NON_RHEL_LT(5, 9) || VER_RHEL_LT(8, 4)
 	case XDP_QUERY_PROG:
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
 		if (nn->xdp.prog)
@@ -4233,6 +4374,11 @@ static void nfp_net_irqmod_init(struct nfp_net *nn)
 	nn->rx_coalesce_max_frames = 64;
 	nn->tx_coalesce_usecs      = 50;
 	nn->tx_coalesce_max_frames = 64;
+
+#ifdef COMPAT_HAVE_DIM
+	nn->rx_coalesce_adapt_on   = true;
+	nn->tx_coalesce_adapt_on   = true;
+#endif
 }
 
 static void nfp_net_netdev_init(struct nfp_net *nn)
@@ -4330,7 +4476,7 @@ static void nfp_net_netdev_init(struct nfp_net *nn)
 	netdev->max_mtu = nn->max_mtu;
 #endif
 
-	netdev->gso_max_segs = NFP_NET_LSO_MAX_SEGS;
+	netif_set_gso_max_segs(netdev, NFP_NET_LSO_MAX_SEGS);
 
 	netif_carrier_off(netdev);
 

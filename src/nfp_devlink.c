@@ -360,7 +360,7 @@ err_close_nsp:
 	return err;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+#if VER_NON_RHEL_LT(5, 10) || VER_RHEL_LT(8, 5)
 static int
 nfp_devlink_flash_update(struct devlink *devlink, const char *path,
 			 const char *component, struct netlink_ext_ack *extack)
@@ -376,7 +376,7 @@ nfp_devlink_flash_update(struct devlink *devlink,
 			 struct netlink_ext_ack *extack)
 {
 	return nfp_flash_update_common(devlink_priv(devlink),
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if VER_NON_RHEL_GE(5, 11) || VER_RHEL_GE(8, 5)
 				       params->fw,
 #else
 				       params->file_name,
@@ -419,6 +419,10 @@ int nfp_devlink_port_register(struct nfp_app *app, struct nfp_port *port)
 		return ret;
 
 	attrs.split = eth_port.is_split;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+	attrs.splittable = !attrs.split;
+	attrs.lanes = eth_port.port_lanes;
+#endif
 	attrs.flavour = DEVLINK_PORT_FLAVOUR_PHYSICAL;
 	attrs.phys.port_number = eth_port.label_port;
 	attrs.phys.split_subport_number = eth_port.label_subport;

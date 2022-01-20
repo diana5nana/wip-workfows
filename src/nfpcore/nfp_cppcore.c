@@ -978,8 +978,10 @@ int nfp_cpp_area_cache_add(struct nfp_cpp *cpp, size_t size)
 		return -ENOMEM;
 
 	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
-	if (!cache)
+	if (!cache) {
+		nfp_cpp_area_free(area);
 		return -ENOMEM;
+	}
 
 	cache->id = 0;
 	cache->addr = 0;
@@ -1080,8 +1082,7 @@ area_cache_put(struct nfp_cpp *cpp, struct nfp_cpp_area_cache *cache)
 		return;
 
 	/* Move to front of LRU */
-	list_del(&cache->entry);
-	list_add(&cache->entry, &cpp->area_cache_list);
+	list_move(&cache->entry, &cpp->area_cache_list);
 
 	mutex_unlock(&cpp->area_cache_mutex);
 }

@@ -49,11 +49,11 @@
 #endif
 
 /* Redefine LINUX_VERSION_CODE for net and *-next kernels */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-#include <linux/brcmphy.h>
-#ifdef PHY_ID_BCM72116
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
+#include <linux/btf_ids.h>
+#ifdef BTF_TRACING_TYPE_xxx
 #undef LINUX_VERSION_CODE
-#define LINUX_VERSION_CODE KERNEL_VERSION(5, 12, 0)
+#define LINUX_VERSION_CODE KERNEL_VERSION(5, 17, 0)
 #endif
 #endif
 
@@ -840,7 +840,7 @@ struct compat__devlink_port_attrs {
 #define compat__devlink_port_attrs devlink_port_attrs
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+#if VER_NON_RHEL_LT(5, 9) || VER_RHEL_LT(8, 4)
 static inline
 void compat__devlink_port_attrs_set(struct devlink_port *devlink_port,
 				    struct compat__devlink_port_attrs *attrs)
@@ -984,7 +984,7 @@ xdp_attachment_setup(struct xdp_attachment_info *info, struct netdev_bpf *bpf)
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0) && \
-	LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+	(VER_NON_RHEL_LT(5, 12) || RHEL_RELEASE_LT(8, 338, 0, 0))
 static __always_inline void
 xdp_init_buff(struct xdp_buff *xdp, u32 frame_sz, struct xdp_rxq_info *rxq)
 {
@@ -995,7 +995,8 @@ xdp_init_buff(struct xdp_buff *xdp, u32 frame_sz, struct xdp_rxq_info *rxq)
 }
 #endif
 
-#if COMPAT__HAVE_XDP && LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#if COMPAT__HAVE_XDP && \
+	(VER_NON_RHEL_LT(5, 12) || RHEL_RELEASE_LT(8, 338, 0, 0))
 static __always_inline void
 xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 		 int headroom, int data_len, const bool meta_valid)
@@ -1053,6 +1054,12 @@ static inline bool netif_is_gretap(const struct net_device *dev)
 {
 	return dev->rtnl_link_ops &&
 	       !strcmp(dev->rtnl_link_ops->kind, "gretap");
+}
+
+static inline bool netif_is_ip6gretap(const struct net_device *dev)
+{
+	return dev->rtnl_link_ops &&
+	       !strcmp(dev->rtnl_link_ops->kind, "ip6gretap");
 }
 #endif
 
@@ -1262,7 +1269,7 @@ compat__tca_pedit_offset(const struct flow_action_entry *act, int idx)
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)
+#if VER_NON_RHEL_LT(5, 1) || VER_RHEL_LT(8, 5)
 int compat__nfp_net_flash_device(struct net_device *netdev,
 				 struct ethtool_flash *flash);
 #else
@@ -1500,7 +1507,7 @@ flow_indr_block_cb_remove(struct flow_block_cb *block_cb,
 }
 #endif
 
-#if COMPAT__HAVE_UDP_OFFLOAD && LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+#if COMPAT__HAVE_UDP_OFFLOAD && (VER_NON_RHEL_LT(5, 9) || VER_RHEL_LT(8, 4))
 #define udp_tunnel_nic_add_port nfp_net_add_vxlan_port
 #define udp_tunnel_nic_del_port nfp_net_del_vxlan_port
 #endif
@@ -1509,6 +1516,27 @@ flow_indr_block_cb_remove(struct flow_block_cb *block_cb,
 	LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 5)
 void flow_rule_match_cvlan(const struct flow_rule *rule,
 			   struct flow_match_vlan *out);
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+static inline void eth_hw_addr_set(struct net_device *dev, const u8 *addr)
+{
+	ether_addr_copy(dev->dev_addr, addr);
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
+typedef struct gnet_stats_basic_packed compat__gnet_stats_basic_sync;
+#else
+typedef struct gnet_stats_basic_sync compat__gnet_stats_basic_sync;
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0)
+static inline void netif_set_gso_max_segs(struct net_device *dev,
+					  unsigned int segs)
+{
+	dev->gso_max_segs = segs;
+}
 #endif
 
 #endif /* _NFP_NET_COMPAT_H_ */
