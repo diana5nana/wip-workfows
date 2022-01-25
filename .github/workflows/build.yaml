@@ -463,15 +463,8 @@ jobs:
         env:
           RELEASE_NAME: ${{ matrix.release.name }}
         run: |
-          case $RELEASE_NAME in
-          el7*) OS_DIR1="os"
-                OS_DIR2=""
-                ;;
-          el8*) OS_DIR1="BaseOS"
-                OS_DIR2="os"
-                ;;
-          esac
-
+          OS_DIR1="BaseOS"
+          OS_DIR2="os"
           MIRROR="mirrors.bclinux.org/bclinux"
           OS_PATH="$MIRROR/$RELEASE_NAME/$OS_DIR1/x86_64/$OS_DIR2/Packages"
           UPDATE_PATH="$MIRROR/$RELEASE_NAME/updates/x86_64/$OS_DIR2/Packages"
@@ -487,20 +480,10 @@ jobs:
           path: ${{ env.DOWNLOAD }}/${{ env.OS_PATH }}
           key: ${{ env.cache-name }}-bclinux-${{ matrix.release.name }}-v2
 
-      - name: Cache Update Kernel Header Packages
-        if: startsWith(matrix.release.name, 'el7')
-        uses: actions/cache@v2
-        env:
-          cache-name: cache-update-headers
-        with:
-          path: ${{ env.DOWNLOAD }}/${{ env.UPDATE_PATH }}
-          key: ${{ env.cache-name }}-bclinux-${{ matrix.release.name }}-v2
-
       - name: Install Dependencies
         run: yum -q -y install elfutils-libelf-devel gcc make wget ca-certificates
 
       - name: Filter latest BCLinux stream kernel
-        if: startsWith(matrix.release.name, 'el8')
         run: |
           for i in $(curl -s "http://${{ env.OS_PATH }}/" | \
           grep -o -E "kernel-devel-4.19.0-([0-9]|.){1,12}.el8([0-9]|_){0,9}.bclinux.x86_64.rpm")
@@ -538,14 +521,6 @@ jobs:
         with:
             output-path: ${{ env.DOWNLOAD }}
             url: "http://${{ env.OS_PATH }}"
-            accept: "kernel-devel-${{ env.KVER }}.rpm"
-
-      - name: Download Update Kernel Header Packages
-        if: startsWith(matrix.release.name, 'el7')
-        uses: ./.github/actions/download
-        with:
-            output-path: ${{ env.DOWNLOAD }}
-            url: "http://${{ env.UPDATE_PATH }}"
             accept: "kernel-devel-${{ env.KVER }}.rpm"
 
       - name: Unpack Kernel Headers
