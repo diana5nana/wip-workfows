@@ -1518,7 +1518,8 @@ void flow_rule_match_cvlan(const struct flow_rule *rule,
 			   struct flow_match_vlan *out);
 #endif
 
-#if VER_RHEL_LT(5, 15) && RHEL_RELEASE_LT(8, 358, 0, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0) && \
+!(VER_NON_RHEL_GE(5, 15) || RHEL_RELEASE_GE(8, 358, 0, 0))
 static inline void eth_hw_addr_set(struct net_device *dev, const u8 *addr)
 {
 	ether_addr_copy(dev->dev_addr, addr);
