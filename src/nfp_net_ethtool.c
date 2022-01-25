@@ -1187,7 +1187,7 @@ static void nfp_net_get_regs(struct net_device *netdev,
 static int nfp_net_get_coalesce(struct net_device *netdev,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)|| \
     LINUX_VERSION_CODE == KERNEL_VERSION(4, 18, 0)&& \
-	RHEL_RELEASE_GE(8, 358, 0, 0))
+	RHEL_RELEASE_GE(8, 358, 0, 0)
 				struct ethtool_coalesce *ec,
 				struct kernel_ethtool_coalesce *kernel_coal,
 				struct netlink_ext_ack *extack)
