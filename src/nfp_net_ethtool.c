@@ -1184,9 +1184,6 @@ static void nfp_net_get_regs(struct net_device *netdev,
 		regs_buf[i] = readl(nn->dp.ctrl_bar + (i * sizeof(u32)));
 }
 
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)|| \
-//    LINUX_VERSION_CODE == KERNEL_VERSION(4, 18, 0)&& \
-//	RHEL_RELEASE_GE(8, 358, 0, 0)
 static int nfp_net_get_coalesce(struct net_device *netdev,
 #if VER_NON_RHEL_GE(5, 15) || RHEL_RELEASE_GE(8, 358, 0, 0)
 				struct ethtool_coalesce *ec,
@@ -1447,9 +1444,6 @@ exit_close_nsp:
 	return err;
 }
 
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)|| \
-//    LINUX_VERSION_CODE == KERNEL_VERSION(4, 18, 0)&& \
-//	RHEL_RELEASE_GE(8, 358, 0, 0)
 static int nfp_net_set_coalesce(struct net_device *netdev,
 #if VER_NON_RHEL_GE(5, 15) || RHEL_RELEASE_GE(8, 358, 0, 0)
 				struct ethtool_coalesce *ec,
